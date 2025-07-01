@@ -1,3 +1,6 @@
+js-pnpm-build
+python-uv-setup
+
 ### IntelliJ IDEA project files ###
 .idea/
 *.iws

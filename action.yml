@@ -1,36 +1,173 @@
-name: "Python Uv Build"
-description: "A simple GitHub Action that prints a greeting"
-author: "Jimmie Fulton <jimmie.fulton@gmail.com>"
+name: "Python UV Build"
+description: "Builds a Python project using uv with flexible lint, test, and build commands"
+author: "Jimmie Fulton <jimmie@ybor.ai>"
 
 # Define the inputs for this action
 inputs:
-  who-to-greet:
-    description: "Who to greet"
-    required: true
-    default: "World"
-  message:
-    description: "Custom message to include"
+  # Lint configuration
+  run-lint:
+    description: "Whether to run linting"
     required: false
-    default: "Hello"
+    default: "true"
+  lint-command:
+    description: "Command to run for linting"
+    required: false
+    default: "uv run ruff check"
+  lint-args:
+    description: "Additional arguments for the lint command"
+    required: false
+    default: ""
 
-# Define the outputs for this action
-outputs:
-  time:
-    description: "The time we greeted you"
-    value: ${{ steps.hello.outputs.time }}
+  # Test configuration
+  run-test:
+    description: "Whether to run tests"
+    required: false
+    default: "true"
+  test-command:
+    description: "Command to run for testing"
+    required: false
+    default: "uv run pytest"
+  test-args:
+    description: "Additional arguments for the test command"
+    required: false
+    default: ""
+
+  # Build configuration
+  run-build:
+    description: "Whether to run build"
+    required: false
+    default: "true"
+  build-command:
+    description: "Command to run for building"
+    required: false
+    default: "uv build"
+  build-args:
+    description: "Additional arguments for the build command"
+    required: false
+    default: ""
+
+  # Python configuration
+  python-options:
+    description: "Python options for all processes"
+    required: false
+    default: ""
+
+  # Coverage configuration
+  archive-coverage:
+    description: "Whether to archive code coverage results"
+    required: false
+    default: "false"
+  coverage-path:
+    description: "Path to the coverage reports"
+    required: false
+    default: "htmlcov"
 
 # Define the runs configuration
 runs:
   using: "composite"
   steps:
-    - name: Hello step
-      id: hello
+    - name: Set Python Options
+      if: inputs.python-options != ''
+      shell: bash
+      run: export PYTHONPATH="${{ inputs.python-options }}"
+
+    - name: Sync dependencies
       shell: bash
       run: |
-        echo "${{ inputs.message }}, ${{ inputs.who-to-greet }}!"
-        echo "time=$(date)" >> $GITHUB_OUTPUT
+        echo "::group::Syncing Dependencies"
+        uv sync
+        echo "::endgroup::"
+
+    - name: Lint
+      if: inputs.run-lint == 'true'
+      shell: bash
+      run: |
+        echo "::group::Running Lint"
+        echo "Running command: ${{ inputs.lint-command }} ${{ inputs.lint-args }}"
+        
+        # Check if pyproject.toml exists and has tool.ruff section for ruff commands
+        if [[ "${{ inputs.lint-command }}" == *"ruff"* ]] && [ -f "pyproject.toml" ]; then
+          if grep -q "\[tool\.ruff\]" pyproject.toml; then
+            ${{ inputs.lint-command }} ${{ inputs.lint-args }} || {
+              echo "::error::Linting failed. Please check the logs above for errors."
+              exit 1
+            }
+          else
+            echo "No ruff configuration found in pyproject.toml. Skipping linting."
+          fi
+        else
+          ${{ inputs.lint-command }} ${{ inputs.lint-args }} || {
+            echo "::error::Linting failed. Please check the logs above for errors."
+            exit 1
+          }
+        fi
+        echo "::endgroup::"
+
+    - name: Test
+      if: inputs.run-test == 'true'
+      shell: bash
+      run: |
+        echo "::group::Running Tests"
+        echo "Running command: ${{ inputs.test-command }} ${{ inputs.test-args }}"
+        
+        # Check if pyproject.toml exists and has tool.pytest section for pytest commands
+        if [[ "${{ inputs.test-command }}" == *"pytest"* ]] && [ -f "pyproject.toml" ]; then
+          if grep -q "\[tool\.pytest\]" pyproject.toml || find . -name "test_*.py" -o -name "*_test.py" | grep -q .; then
+            ${{ inputs.test-command }} ${{ inputs.test-args }} || {
+              echo "::error::Tests failed. Please check the logs above for errors."
+              exit 1
+            }
+          else
+            echo "No pytest configuration or test files found. Skipping tests."
+          fi
+        else
+          ${{ inputs.test-command }} ${{ inputs.test-args }} || {
+            echo "::error::Tests failed. Please check the logs above for errors."
+            exit 1
+          }
+        fi
+        echo "::endgroup::"
+
+    - name: Archive code coverage results
+      if: inputs.archive-coverage == 'true' && inputs.run-test == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-coverage-report
+        path: ${{ inputs.coverage-path }}
+
+    - name: Build
+      if: inputs.run-build == 'true'
+      shell: bash
+      run: |
+        echo "::group::Running Build"
+        echo "Running command: ${{ inputs.build-command }} ${{ inputs.build-args }}"
+        
+        # Check if pyproject.toml exists for build commands
+        if [ -f "pyproject.toml" ]; then
+          ${{ inputs.build-command }} ${{ inputs.build-args }} || {
+            echo "::error::Build failed. Please check the logs above for errors."
+            exit 1
+          }
+        else
+          echo "No pyproject.toml found. Skipping build."
+        fi
+        echo "::endgroup::"
+
+    - name: List Built Packages
+      if: inputs.run-build == 'true' && success()
+      id: built-packages
+      shell: bash
+      run: |
+        echo "::group::Built Packages"
+        if [ -d "dist" ]; then
+          echo "Built packages in dist/:"
+          ls -la dist/
+        else
+          echo "No dist directory found"
+        fi
+        echo "::endgroup::"
 
 # Define the branding for the action in the GitHub Marketplace
 branding:
-  icon: "award"
-  color: "blue"
+  icon: "package"
+  color: "purple"
