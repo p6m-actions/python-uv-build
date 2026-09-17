@@ -110,15 +110,45 @@ runs:
         echo "::group::Running Tests"
         echo "Running command: ${{ inputs.test-command }} ${{ inputs.test-args }}"
         
-        # Check if pyproject.toml exists and has tool.pytest section for pytest commands
+        # Only the PROJECT's own tests count. The search prunes .venv and friends
+        # because dependencies ship their own test_*.py files: an unscoped
+        # `find .` runs after `uv sync` has populated site-packages, so it
+        # reports "this app has tests" for an app with none, and the run then
+        # fails on `Failed to spawn: pytest` -- a tool nothing declared.
+        #
+        # The pyproject check matches `[tool.pytest` unanchored-right because
+        # the conventional section is `[tool.pytest.ini_options]`; the previous
+        # `\[tool\.pytest\]` matched only the bare form almost nobody writes.
         if [[ "${{ inputs.test-command }}" == *"pytest"* ]] && [ -f "pyproject.toml" ]; then
-          if grep -q "\[tool\.pytest\]" pyproject.toml || find . -name "test_*.py" -o -name "*_test.py" | grep -q .; then
+          HAS_PYTEST_CFG=false
+          grep -q "^\[tool\.pytest" pyproject.toml && HAS_PYTEST_CFG=true
+
+          FOUND_TEST="$(find . \
+            \( -name .venv -o -name venv -o -name .git -o -name node_modules \
+               -o -name '*.egg-info' -o -name .tox -o -name .mypy_cache \
+               -o -name __pycache__ -o -name build -o -name dist \) -prune -o \
+            \( -name 'test_*.py' -o -name '*_test.py' \) -print -quit)"
+
+          if [ "$HAS_PYTEST_CFG" = true ] || [ -n "$FOUND_TEST" ]; then
+            if [ -n "$FOUND_TEST" ]; then
+              echo "Test discovery: found $FOUND_TEST"
+            else
+              echo "Test discovery: [tool.pytest*] section in pyproject.toml"
+            fi
+
+            # Verified before spawning so a missing test dependency reports
+            # itself rather than surfacing as "Tests failed" with no test run.
+            if ! ${{ inputs.test-command }} --version >/dev/null 2>&1; then
+              echo "::error::Tests were requested but pytest is not installed in this project. Add it as a dev dependency (uv add --dev pytest), or set run-test: \"false\" on this action."
+              exit 1
+            fi
+
             ${{ inputs.test-command }} ${{ inputs.test-args }} || {
               echo "::error::Tests failed. Please check the logs above for errors."
               exit 1
             }
           else
-            echo "No pytest configuration or test files found. Skipping tests."
+            echo "No pytest configuration or project test files found. Skipping tests."
           fi
         else
           ${{ inputs.test-command }} ${{ inputs.test-args }} || {
